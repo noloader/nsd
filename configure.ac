@@ -2,14 +2,16 @@ dnl
 dnl Some global settings
 dnl
 
-sinclude(acx_nlnetlabs.m4)
-sinclude(dnstap/dnstap.m4)
-
 AC_INIT(NSD,4.3.1,nsd-bugs@nlnetlabs.nl)
 AC_CONFIG_HEADER([config.h])
 
-CFLAGS="$CFLAGS"
 AC_AIX
+AC_LANG([C])
+
+sinclude(acx_nlnetlabs.m4)
+sinclude(dnstap/dnstap.m4)
+
+CFLAGS="$CFLAGS"
 if test "$ac_cv_header_minix_config_h" = "yes"; then
 	AC_DEFINE(_NETBSD_SOURCE,1, [Enable for compile on Minix])
 fi
@@ -163,7 +165,269 @@ AC_ARG_WITH([user],
 AC_SUBST(user)
 AC_DEFINE_UNQUOTED(USER, ["$user"], [the user name to drop privileges to])
 
+#
+# Determine if hardening should be applied
+# Hardening is applied by default. Also see https://wiki.debian.org/Hardening and
+# https://developers.redhat.com/blog/2018/03/21/compiler-and-linker-flags-gcc/
+# The tests also strip unneeded functions so bad guys cannot use them in
+# ROP gadgets in pre-CET environments.
+#
+AC_ARG_ENABLE([hardening],
+    AS_HELP_STRING([--disable-hardening], [Disable server hardening]))
+
+AS_IF([test "x$enable_hardening" != "xno"], [
+  BAKCPPFLAGS="$CPPFLAGS"
+  BAKCFLAGS="$CFLAGS"
+  BAKASFLAGS="$ASFLAGS"
+  BAKLDFLAGS="$LDFLAGS"
+
+  # Some tests below should fail if not on Darwin. Unfortunately,
+  # Autotools drops the ball and does not detect the error.
+  is_darwin=`uname -s 2>/dev/null | grep -i -c darwin`
+  has_readelf=`command -v readelf 2>/dev/null | grep -i -c readelf`
+
+  if test "$has_readelf" -ne 0;
+  then
+    # This test is tuned for Linux and readelf. The test is a hack because
+    # I don't know how to run objdump or readelf in an AC_LINK_IFELSE test.
+    AC_MSG_CHECKING([for -D_FORTIFY_SOURCE=2])
+    echo '#include <string.h>
+      int main(int argc, char** argv)
+      {
+        [char msg[16];]
+        [strcpy(msg, argv[0]);]
+        [return 0;]
+      }' > fortify_test.c
+
+    if $CC -D_FORTIFY_SOURCE=2 $CPPFLAGS -O2 $CFLAGS fortify_test.c -o fortify_test.exe;
+    then
+      count=`readelf --relocs fortify_test.exe | grep -i -c '_chk'`
+      if test "$count" -ne 0; then
+        AC_MSG_RESULT([yes]); NSD_CPPFLAGS="$NSD_CPPFLAGS -D_FORTIFY_SOURCE=2"
+      else
+        AC_MSG_RESULT([no])
+      fi
+    fi
+
+    rm -rf fortify_test.c fortify_test.exe 2>/dev/null
+  fi
+
+  CPPFLAGS="$BAKCPPFLAGS"; CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fasynchronous-unwind-tables";
+  AC_MSG_CHECKING([for -fasynchronous-unwind-tables])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fasynchronous-unwind-tables"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fexceptions";
+  AC_MSG_CHECKING([for -fexceptions])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]);  NSD_CFLAGS="$NSD_CFLAGS -fexceptions"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fplugin=annobin";
+  AC_MSG_CHECKING([for -fplugin=annobin])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fplugin=annobin"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fstack-clash-protection";
+  AC_MSG_CHECKING([for -fstack-clash-protection])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fstack-clash-protection"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fstack-protector-strong";
+  AC_MSG_CHECKING([for -fstack-protector-strong])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fstack-protector-strong"],
+    [AC_MSG_RESULT([no]);  need_stack_protector=yes]
+  )
+
+  # Last try...
+  if test "x$need_stack_protector" = "xyes";
+  then
+    CFLAGS="$BAKCFLAGS";
+    CFLAGS="$CFLAGS -fstack-protector";
+    AC_MSG_CHECKING([for -fstack-protector])
+    AC_LINK_IFELSE(
+      [AC_LANG_SOURCE([int main(void) {return 0;}])],
+      [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fstack-protector"],
+      [AC_MSG_RESULT([no])]
+	)
+  fi
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -grecord-gcc-switches";
+  AC_MSG_CHECKING([for -grecord-gcc-switches])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -grecord-gcc-switches"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -mcet -fcf-protection";
+  AC_MSG_CHECKING([for -mcet -fcf-protection])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -mcet -fcf-protection"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Werror=format-security";
+  AC_MSG_CHECKING([for -Werror=format-security])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -Werror=format-security"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Werror=implicit-function-declaration";
+  AC_MSG_CHECKING([for -Werror=implicit-function-declaration])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -Werror=implicit-function-declaration"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fdata-sections";
+  AC_MSG_CHECKING([for -fdata-sections])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fdata-sections"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -ffunction-sections";
+  AC_MSG_CHECKING([for -ffunction-sections])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -ffunction-sections"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  # -fPIC or -fPIE and -shared or -pie are matched sets
+  # -fPIC can be used in place of -fPIE, but not vice-versa.
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -fPIC";
+  AC_MSG_CHECKING([for -fPIC])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_CFLAGS="$NSD_CFLAGS -fPIC"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -pie";
+  AC_MSG_CHECKING([for -pie])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); BIN_LDFLAGS="$BIN_LDFLAGS -pie"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  # ASFLAGS passed through compiler
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wa,--noexecstack";
+  AC_MSG_CHECKING([for -Wa,--noexecstack])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_ASFLAGS="$NSD_ASFLAGS -Wa,--noexecstack"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  # LDFLAGS passed through compiler
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wl,--gc-sections";
+  AC_MSG_CHECKING([for -Wl,--gc-sections])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_LDFLAGS="$NSD_LDFLAGS -Wl,--gc-sections"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  if test "$is_darwin" -ne 0; then
+    CFLAGS="$BAKCFLAGS";
+    CFLAGS="$CFLAGS -Wl,-dead_strip";
+    AC_MSG_CHECKING([for -Wl,-dead_strip])
+    AC_LINK_IFELSE(
+      [AC_LANG_SOURCE([int main(void) {return 0;}])],
+      [AC_MSG_RESULT([yes]); NSD_LDFLAGS="$NSD_LDFLAGS -Wl,-dead_strip"],
+      [AC_MSG_RESULT([no])]
+    )
+  fi
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wl,--exclude-libs,ALL";
+  AC_MSG_CHECKING([for -Wl,--exclude-libs,ALL])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_LDFLAGS="$NSD_LDFLAGS -Wl,--exclude-libs,ALL"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wl,--as-needed";
+  AC_MSG_CHECKING([for -Wl,--as-needed])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); NSD_LDFLAGS="$NSD_LDFLAGS -Wl,--as-needed"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wl,-z,defs";
+  AC_MSG_CHECKING([for -Wl,-z,defs])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); BIN_LDFLAGS="$BIN_LDFLAGS -Wl,-z,defs"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wl,-z,relro";
+  AC_MSG_CHECKING([for -Wl,-z,relro])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); BIN_LDFLAGS="$BIN_LDFLAGS -Wl,-z,relro"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CFLAGS="$BAKCFLAGS";
+  CFLAGS="$CFLAGS -Wl,-z,now";
+  AC_MSG_CHECKING([for -Wl,-z,now])
+  AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main(void) {return 0;}])],
+    [AC_MSG_RESULT([yes]); BIN_LDFLAGS="$BIN_LDFLAGS -Wl,-z,now"],
+    [AC_MSG_RESULT([no])]
+  )
+
+  CPPFLAGS="$BAKCPPFLAGS"
+  CFLAGS="$BAKCFLAGS"
+  LDFLAGS="$BAKLDFLAGS"
+])
+
+#
 # Checks for programs.
+#
 AC_PROG_AWK
 AC_PROG_CC
 AC_PROG_LN_S
@@ -390,14 +654,14 @@ if test x_$withval = x_yes -o x_$withval != x_no; then
         if test x_$found_libevent != x_yes; then
 		if test -f "$dir/event.h" -a \( -f "$dir/libevent.la" -o -f "$dir/libev.la" \) ; then
 			# libevent source directory
-            		AC_MSG_RESULT(found in $thedir)
-                	CPPFLAGS="$CPPFLAGS -I$thedir -I$thedir/include"
+			AC_MSG_RESULT(found in $thedir)
+			CPPFLAGS="$CPPFLAGS -I$thedir -I$thedir/include"
 			# remove evdns from linking
 			ev_files_o=`ls $thedir/*.o | grep -v evdns\.o | grep -v bufferevent_openssl\.o`
 			cp $ev_files_o .
 			LDFLAGS="$ev_files_o $LDFLAGS -lm"
 		else
-            		AC_MSG_ERROR([Cannot find the libevent library.
+			AC_MSG_ERROR([Cannot find the libevent library.
 You can restart ./configure --with-libevent=no to use a builtin alternative.])
 		fi
         else
@@ -1324,6 +1588,14 @@ if test "$enable_checking" = "yes"; then
         echo "*                                              *"
         echo "************************************************"
 fi
+
+# set the hardening flags we set
+AC_SUBST([NSD_CPPFLAGS])
+AC_SUBST([NSD_CFLAGS])
+AC_SUBST([NSD_ASFLAGS])
+AC_SUBST([NSD_LDFLAGS])
+AC_SUBST([BIN_CFLAGS])
+AC_SUBST([BIN_LDFLAGS])
 
 AC_CONFIG_FILES([Makefile $dnstap_config])
 AC_OUTPUT
