@@ -2,16 +2,25 @@ dnl
 dnl Some global settings
 dnl
 
-AC_INIT(NSD,4.3.1,nsd-bugs@nlnetlabs.nl)
-AC_CONFIG_HEADER([config.h])
-
-AC_AIX
-AC_LANG([C])
-
 sinclude(acx_nlnetlabs.m4)
 sinclude(dnstap/dnstap.m4)
 
+AC_INIT(NSD,4.3.1,nsd-bugs@nlnetlabs.nl)
+AC_CONFIG_HEADER([config.h])
+
+#
+# Setup the standard programs
+# https://www.gnu.org/software/autoconf/manual/autoconf-2.69/html_node/Setting-Output-Variables.html
+
+AC_ARG_VAR(SED, [location of the sed program])
+AC_ARG_VAR(AWK, [location of the awk program])
+AC_ARG_VAR(GREP, [location of the grep program])
+AC_ARG_VAR(EGREP, [location of the egrep program])
+AC_ARG_VAR(LEX, [location of the lex program with GNU extensions (flex)])
+AC_ARG_VAR(YACC, [location of the yacc program with GNU extensions (bison)])
+
 CFLAGS="$CFLAGS"
+AC_AIX
 if test "$ac_cv_header_minix_config_h" = "yes"; then
 	AC_DEFINE(_NETBSD_SOURCE,1, [Enable for compile on Minix])
 fi
@@ -425,25 +434,38 @@ AS_IF([test "x$enable_hardening" != "xno"], [
   LDFLAGS="$BAKLDFLAGS"
 ])
 
-#
-# Checks for programs.
-#
-AC_PROG_AWK
 AC_PROG_CC
-AC_PROG_LN_S
-AC_PROG_INSTALL
+AC_PROG_SED
+AC_PROG_AWK
+AC_PROG_GREP
+AC_PROG_EGREP
 AC_PROG_LEX
 AC_PROG_YACC
+AC_PROG_LN_S
+AC_PROG_INSTALL
 
 if test "$LEX" != ":" -a "$LEX" != ""; then
+# Solaris provides anemic tools, and they don't offer GNU extensions like
+# 'flex -i'. Solaris also does not offer GNU replacements in /usr/gnu/bin.
+AC_MSG_CHECKING([whether lex accepts -i])
+AS_IF([echo "%%" | $LEX -i -t >/dev/null 2>&1],
+  [
+    AC_MSG_RESULT([yes])
+  ],
+  [
+    AC_MSG_RESULT([no])
+    AC_MSG_ERROR([unable to find a lexer that supports -i. If one is available then set the LEX variable])
+  ]
+)
+
   # Check if lex defines yy_current_buffer, because 2.4.6 and older use it,
   # but later could define it as a macro and then we should not redefine it.
   AC_MSG_CHECKING(if lex defines yy_current_buffer)
   cat <<EOF >conftest.lex
 %%
 EOF
-  $LEX -i -t conftest.lex >> conftest.c
-  if grep "^#define yy_current_buffer" conftest.c >/dev/null; then
+  $LEX -i -t conftest.lex >> conftest.c 2>/dev/null
+  if $GREP "^#define yy_current_buffer" conftest.c >/dev/null; then
 	  AC_DEFINE_UNQUOTED(LEX_DEFINES_YY_CURRENT_BUFFER, 1, [If flex defines yy_current_buffer as a macro])
 	AC_MSG_RESULT(yes)
   else
@@ -521,7 +543,7 @@ AC_DEFUN([CHECK_COMPILER_FLAG],
 [
 AC_REQUIRE([AC_PROG_CC])
 AC_MSG_CHECKING(whether $CC supports -$1)
-cache=`echo $1 | sed 'y%.=/+-%___p_%'`
+cache=`echo $1 | $SED 'y%.=/+-%___p_%'`
 AC_CACHE_VAL(cv_prog_cc_flag_$cache,
 [
 echo 'void f(){}' >conftest.c
@@ -595,14 +617,14 @@ AC_CHECK_CTIME_R
 AC_DEFUN([CHECK_SSL], [
     AC_ARG_WITH(ssl, AC_HELP_STRING([--with-ssl=pathname],
                 [enable SSL (will check /usr/local/ssl
-                /usr/lib/ssl /usr/ssl /usr/pkg /usr/sfw /usr/local /usr)]),[
+                /usr/lib/ssl /usr/ssl /usr/pkg /usr/sfw /usr/local /usr /usr/local/opt/openssl)]),[
         ],[
             withval="yes"
         ])
     if test x_$withval != x_no; then
         AC_MSG_CHECKING(for SSL)
         if test x_$withval = x_ -o x_$withval = x_yes; then
-            withval="/usr/local/ssl /usr/lib/ssl /usr/ssl /usr/pkg /usr/sfw /usr/local /usr"
+            withval="/usr/local/ssl /usr/lib/ssl /usr/ssl /usr/pkg /usr/sfw /usr/local /usr /usr/local/opt/openssl"
         fi
         for dir in $withval; do
             ssldir="$dir"
@@ -633,12 +655,12 @@ AC_DEFUN([CHECK_SSL], [
 
 # check for libevent
 AC_ARG_WITH(libevent, AC_HELP_STRING([--with-libevent=pathname],
-    [use libevent (will check /usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr  or you can specify an explicit path), useful when the zone count is high.]),
+    [use libevent (will check /usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr /usr/local/opt/libevent or you can specify an explicit path), useful when the zone count is high.]),
     [ ],[ withval="yes" ])
 if test x_$withval = x_yes -o x_$withval != x_no; then
         AC_MSG_CHECKING(for libevent)
         if test x_$withval = x_ -o x_$withval = x_yes; then
-            withval="/usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr"
+            withval="/usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr /usr/local/opt/libevent"
         fi
         for dir in $withval; do
             thedir="$dir"
@@ -654,14 +676,14 @@ if test x_$withval = x_yes -o x_$withval != x_no; then
         if test x_$found_libevent != x_yes; then
 		if test -f "$dir/event.h" -a \( -f "$dir/libevent.la" -o -f "$dir/libev.la" \) ; then
 			# libevent source directory
-			AC_MSG_RESULT(found in $thedir)
-			CPPFLAGS="$CPPFLAGS -I$thedir -I$thedir/include"
+            		AC_MSG_RESULT(found in $thedir)
+                	CPPFLAGS="$CPPFLAGS -I$thedir -I$thedir/include"
 			# remove evdns from linking
-			ev_files_o=`ls $thedir/*.o | grep -v evdns\.o | grep -v bufferevent_openssl\.o`
+			ev_files_o=`ls $thedir/*.o | $GREP -v evdns\.o | $GREP -v bufferevent_openssl\.o`
 			cp $ev_files_o .
 			LDFLAGS="$ev_files_o $LDFLAGS -lm"
 		else
-			AC_MSG_ERROR([Cannot find the libevent library.
+            		AC_MSG_ERROR([Cannot find the libevent library.
 You can restart ./configure --with-libevent=no to use a builtin alternative.])
 		fi
         else
@@ -941,12 +963,12 @@ AC_DEFINE([HAVE_SENDMMSG], [1], [Define if sendmmsg exists])]
 esac
 
 # check if setreuid en setregid fail, on MacOSX10.4(darwin8).
-if echo $target_os | grep -i darwin8 > /dev/null; then
+if echo $target_os | $GREP -i darwin8 > /dev/null; then
 	AC_DEFINE(DARWIN_BROKEN_SETREUID, 1, [Define this if on macOSX10.4-darwin8 and setreuid and setregid do not work])
 fi
 
 # GNU HURD needs _GNU_SOURCE defined for cpu affinity gear
-if echo $target_os | grep -i -E 'linux|hurd' > /dev/null; then
+if echo $target_os | $EGREP -i 'linux|hurd' > /dev/null; then
   AC_DEFINE([_GNU_SOURCE, 1, [Define this if on Linux or GNU Hurd for cpu affinity interface]])
 fi
 
@@ -1588,14 +1610,6 @@ if test "$enable_checking" = "yes"; then
         echo "*                                              *"
         echo "************************************************"
 fi
-
-# set the hardening flags we set
-AC_SUBST([NSD_CPPFLAGS])
-AC_SUBST([NSD_CFLAGS])
-AC_SUBST([NSD_ASFLAGS])
-AC_SUBST([NSD_LDFLAGS])
-AC_SUBST([BIN_CFLAGS])
-AC_SUBST([BIN_LDFLAGS])
 
 AC_CONFIG_FILES([Makefile $dnstap_config])
 AC_OUTPUT
