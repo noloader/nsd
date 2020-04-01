@@ -1611,5 +1611,12 @@ if test "$enable_checking" = "yes"; then
         echo "************************************************"
 fi
 
+AC_SUBST(NSD_CPPFLAGS)
+AC_SUBST(NSD_CFLAGS)
+AC_SUBST(NSD_ASFLAGS)
+AC_SUBST(NSD_LDFLAGS)
+AC_SUBST(BIN_CFLAGS)
+AC_SUBST(BIN_LDFLAGS)
+
 AC_CONFIG_FILES([Makefile $dnstap_config])
 AC_OUTPUT
